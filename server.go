@@ -2,16 +2,21 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
 )
 
-type Server struct {
-	Ip   string
-	Port int
+type Message struct {
+	Mess string
+	User *User
+}
 
-	Mes        chan string
+type Server struct {
+	Ip         string
+	Port       int
+	Mes        chan Message
 	Maplock    sync.RWMutex
 	Useronline map[string]*User
 }
@@ -19,10 +24,14 @@ type Server struct {
 //创建一个不断监听Mes的goroutine
 func (s *Server) ListenMessager() {
 	for {
-		mes := <-s.Mes
+		messtruct := <-s.Mes
+		mes := messtruct.Mess
+		mesuser := messtruct.User
 		s.Maplock.Lock()
 		for _, cil := range s.Useronline {
-			cil.C <- mes
+			if cil != mesuser {
+				cil.C <- mes
+			}
 		}
 		s.Maplock.Unlock()
 	}
@@ -30,21 +39,42 @@ func (s *Server) ListenMessager() {
 
 //广播消息
 func (s *Server) Broatcast(user *User, mes string) {
-	mess := "[" + user.Addr + "]" + user.Username + mes
-	s.Mes <- mess
+	if mes == "" {
+		return
+	}
+	mess := "[" + user.Addr + "]" + user.Username + "说:" + mes
+	message := Message{Mess: mess, User: user}
+	s.Mes <- message
 }
 
 //服务端accept到一个客户端进行的操作
 func (s *Server) Handler(conn net.Conn) {
 	//创建一个用户
-	user := NewUser(conn)
+	user := NewUser(conn, *s)
 	fmt.Printf("用户:%s上线\n", user.Username)
 	//将用户加入在线队列中
-	s.Maplock.Lock()
-	s.Useronline[user.Username] = user
-	s.Maplock.Unlock()
+	user.Online(user)
 	//广播上线消息
-	s.Broatcast(user, "上线了")
+	s.Broatcast(user, "我上线了")
+	//接收用户的读入并进行广播
+	for {
+		buf := make([]byte, 4096)
+		n, err := conn.Read(buf)
+		//ctrl+c返回长度为0
+		if n == 0 {
+			s.Broatcast(user, "我下线了")
+			user.Offline()
+			return
+		}
+		if err != nil && err != io.EOF {
+			fmt.Println("用户输入异常")
+			return
+		}
+		//去除"\n"
+		mes := string(buf[:n-1])
+		//广播用户消息
+		user.DoMessage(mes)
+	}
 	select {}
 }
 
@@ -80,7 +110,7 @@ func NewServer(ip string, port int) *Server {
 	server := &Server{
 		Ip:         ip,
 		Port:       port,
-		Mes:        make(chan string),
+		Mes:        make(chan Message),
 		Useronline: make(map[string]*User),
 	}
 	return server
