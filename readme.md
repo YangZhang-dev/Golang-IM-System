@@ -1,5 +1,5 @@
 ### IM-System with Golang
-___生成并执行可执行文件创建客户端___
+___生成并执行可执行文件创建服务端___
 ```bash
     go build -o server main.go server.go user.go
     ./server
